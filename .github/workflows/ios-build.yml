@@ -18,8 +18,7 @@ jobs:
           sudo xcode-select -s /Applications/Xcode.app || true
           xcodebuild -version
 
-      - name: Install signing assets (if provided)
-        if: ${{ secrets.IOS_P12_BASE64 != '' && secrets.IOS_P12_PASSWORD != '' && secrets.IOS_MOBILEPROVISION_BASE64 != '' }}
+      - name: Build / Archive / Export
         env:
           IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
           IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
@@ -27,55 +26,47 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -e
-          KEYCHAIN_PASSWORD=${KEYCHAIN_PASSWORD:-temp_keychain_pass}
-          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
 
-          echo "$IOS_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          echo "$IOS_MOBILEPROVISION_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+          if [ -n "$IOS_P12_BASE64" ] && [ -n "$IOS_P12_PASSWORD" ] && [ -n "$IOS_MOBILEPROVISION_BASE64" ]; then
+            echo "Signing assets found, running signed archive/export..."
+            KEYCHAIN_PASSWORD=${KEYCHAIN_PASSWORD:-temp_keychain_pass}
+            KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
 
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+            echo "$IOS_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            echo "$IOS_MOBILEPROVISION_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
 
-          security import "$RUNNER_TEMP/cert.p12" -P "$IOS_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+            security import "$RUNNER_TEMP/cert.p12" -P "$IOS_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+            security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          cp "$RUNNER_TEMP/profile.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/"
+            mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+            cp "$RUNNER_TEMP/profile.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/"
 
-      - name: Build only (unsigned fallback)
-        if: ${{ secrets.IOS_P12_BASE64 == '' || secrets.IOS_P12_PASSWORD == '' || secrets.IOS_MOBILEPROVISION_BASE64 == '' }}
-        run: |
-          set -e
-          xcodebuild \
-            -project text1.xcodeproj \
-            -scheme text1 \
-            -configuration Release \
-            -sdk iphonesimulator \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
-            CODE_SIGNING_ALLOWED=NO \
-            clean build
+            xcodebuild \
+              -project text1.xcodeproj \
+              -scheme text1 \
+              -configuration Release \
+              -archivePath build/text1.xcarchive \
+              archive
 
-      - name: Archive (signed when cert/profile provided)
-        if: ${{ secrets.IOS_P12_BASE64 != '' && secrets.IOS_P12_PASSWORD != '' && secrets.IOS_MOBILEPROVISION_BASE64 != '' }}
-        run: |
-          set -e
-          xcodebuild \
-            -project text1.xcodeproj \
-            -scheme text1 \
-            -configuration Release \
-            -archivePath build/text1.xcarchive \
-            archive
-
-      - name: Export IPA
-        if: ${{ secrets.IOS_P12_BASE64 != '' && secrets.IOS_P12_PASSWORD != '' && secrets.IOS_MOBILEPROVISION_BASE64 != '' }}
-        run: |
-          set -e
-          xcodebuild -exportArchive \
-            -archivePath build/text1.xcarchive \
-            -exportOptionsPlist ExportOptions.plist \
-            -exportPath build
+            xcodebuild -exportArchive \
+              -archivePath build/text1.xcarchive \
+              -exportOptionsPlist ExportOptions.plist \
+              -exportPath build
+          else
+            echo "No signing assets, running unsigned simulator build..."
+            xcodebuild \
+              -project text1.xcodeproj \
+              -scheme text1 \
+              -configuration Release \
+              -sdk iphonesimulator \
+              -destination 'platform=iOS Simulator,name=iPhone 16' \
+              CODE_SIGNING_ALLOWED=NO \
+              clean build
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
